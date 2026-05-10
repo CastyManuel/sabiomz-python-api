@@ -1,91 +1,63 @@
 #!/usr/bin/env python3
 """
-Sabiomz v5 — Python API Server
-Deploy: gunicorn -w 2 -b 0.0.0.0:$PORT app:app
-"""
-import os, threading, logging
-from flask import Flask, request, jsonify
-from modules.pipeline    import executar_pipeline
-from modules.document    import ler_documento
-from modules.pdf_gen     import gerar_pdf, gerar_docx
-from modules.math_solver import resolver_matematica
-from modules.pdf_search  import pesquisar_livros
+Sabiomz v3 — Python API Server (Flask)
+Substitui o worker CLI. Funciona em Hostinger, cPanel, VPS, etc.
 
-logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
+DEPLOY:
+  pip install flask requests pdfplumber PyPDF2 python-docx reportlab sympy
+  python app.py                          # desenvolvimento
+  gunicorn -w 2 -b 0.0.0.0:5000 app:app # produção
+
+HOSTINGER (Python App):
+  - Entry point: app.py
+  - Port: 5000 (ou a que o painel indicar)
+"""
+
+from flask import Flask, request, jsonify
+import threading
+import logging
+import os
+
+# Módulos internos
+from modules.pipeline      import executar_pipeline
+from modules.document      import ler_documento
+from modules.pdf_gen       import gerar_pdf, gerar_docx
+from modules.math_solver   import resolver_matematica
+from modules.pdf_search    import pesquisar_livros
+
+logging.basicConfig(level=logging.INFO, format='%(asctime)s %(levelname)s %(message)s')
 log = logging.getLogger(__name__)
+
 app = Flask(__name__)
 
-API_SECRET = os.environ.get("SABIO_SECRET", "sabiomz_secret_2025")
+# ── Chave interna de segurança (deve ser igual ao config.php) ──
+API_SECRET = os.environ.get('SABIO_SECRET', 'sabiomz_secret_2025')
 
-def _auth(): return request.headers.get("X-Sabio-Secret") == API_SECRET
-def _err(m, c=400): return jsonify({"error": m}), c
 
-@app.route("/health")
-def health(): return jsonify({"ok": True, "versao": "v5"})
+def verificar_secret():
+    """Verifica o header de autenticação interno."""
+    return request.headers.get('X-Sabio-Secret') == API_SECRET
 
-@app.route("/pipeline/iniciar", methods=["POST"])
+
+# ────────────────────────────────────────────────────────────────
+# ROTA 1: Health check
+# ────────────────────────────────────────────────────────────────
+@app.route('/health', methods=['GET'])
+def health():
+    return jsonify({'ok': True, 'versao': 'v3', 'servico': 'Sabiomz Python API'})
+
+
+# ────────────────────────────────────────────────────────────────
+# ROTA 2: Iniciar pipeline em background
+# POST /pipeline/iniciar
+# Body: {tarefa_id, conv_id, user_id, msg, plano, intencao,
+#        doc_texto, ai_key, ai_model, ai_endpoint, db_*}
+# ────────────────────────────────────────────────────────────────
+@app.route('/pipeline/iniciar', methods=['POST'])
 def pipeline_iniciar():
-    if not _auth(): return _err("Não autorizado", 401)
-    data = request.get_json(force=True) or {}
-    for f in ["token","conv_id","msg","plano","intencao"]:
-        if f not in data: return _err(f"Campo obrigatório: {f}")
-    threading.Thread(target=executar_pipeline, args=(data,), daemon=True).start()
-    log.info(f"Pipeline: token={str(data['token'])[:8]}... tipo={data['intencao']}")
-    return jsonify({"ok": True, "token": data["token"]})
+    if not verificar_secret():
+        return jsonify({'error': 'Não autorizado'}), 401
 
-@app.route("/documento/ler", methods=["POST"])
-def documento_ler():
-    if not _auth(): return _err("Não autorizado", 401)
-    if "ficheiro" in request.files:
-        import tempfile
-        f=request.files["ficheiro"]; ext=os.path.splitext(f.filename)[1].lower()
-        tmp=tempfile.NamedTemporaryFile(suffix=ext,delete=False); f.save(tmp.name)
-        res=ler_documento(tmp.name); os.unlink(tmp.name); return jsonify(res)
-    data=request.get_json(force=True) or {}
-    path=data.get("ficheiro_path","")
-    if not path or not os.path.exists(path): return _err("Ficheiro não encontrado",404)
-    return jsonify(ler_documento(path))
-
-@app.route("/documento/pdf", methods=["POST"])
-def documento_pdf():
-    if not _auth(): return _err("Não autorizado", 401)
-    data=request.get_json(force=True) or {}
-    texto=data.get("texto",""); titulo=data.get("titulo","Trabalho")
-    path=data.get("output_path",f"/tmp/sabio_{data.get('tarefa_id','0')}.pdf")
-    if not texto: return _err("Texto vazio")
-    return jsonify(gerar_pdf(texto, path, titulo))
-
-@app.route("/documento/docx", methods=["POST"])
-def documento_docx():
-    if not _auth(): return _err("Não autorizado", 401)
-    data=request.get_json(force=True) or {}
-    texto=data.get("texto",""); titulo=data.get("titulo","Trabalho")
-    path=data.get("output_path",f"/tmp/sabio_{data.get('tarefa_id','0')}.docx")
-    if not texto: return _err("Texto vazio")
-    return jsonify(gerar_docx(texto, path, titulo))
-
-@app.route("/math/resolver", methods=["POST"])
-def math_resolver():
-    if not _auth(): return _err("Não autorizado", 401)
-    data=request.get_json(force=True) or {}
-    expr=data.get("expressao","").strip()
-    if not expr: return _err("Expressão vazia")
-    return jsonify(resolver_matematica(expr))
-
-@app.route("/livros/pesquisar", methods=["POST"])
-def livros_pesquisar():
-    if not _auth(): return _err("Não autorizado", 401)
-    data=request.get_json(force=True) or {}
-    termo=data.get("termo","").strip()
-    books_dir=data.get("books_dir","./uploads/books")
-    if not termo: return jsonify({"resultados":[],"total":0})
-    return jsonify(pesquisar_livros(termo, books_dir))
-
-if __name__ == "__main__":
-    port=int(os.environ.get("PORT",5000))
-    debug=os.environ.get("DEBUG","false").lower()=="true"
-    log.info(f"Sabiomz Python API na porta {port}")
-    app.run(host="0.0.0.0", port=port, debug=debug)
     data = request.get_json(force=True) or {}
     required = ['tarefa_id', 'conv_id', 'user_id', 'msg', 'plano', 'intencao']
     for f in required:
