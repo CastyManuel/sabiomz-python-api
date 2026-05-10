@@ -1,0 +1,21 @@
+# Sabiomz v3 — Python Requirements
+# Instalar: pip install -r requirements.txt
+
+# Leitura de PDFs (instalar pelo menos um)
+pdfplumber>=0.10.0       # Recomendado — mais preciso
+PyPDF2>=3.0.0            # Alternativa mais leve
+
+# Leitura de documentos Word
+python-docx>=1.1.0
+
+# Geração de PDFs profissionais
+reportlab>=4.0.0
+
+# Matemática simbólica
+sympy>=1.12
+
+# Geração de gráficos matemáticos (opcional)
+# matplotlib>=3.8.0
+
+# Processamento de texto
+# chardet>=5.0.0         # Detecção de encoding (já incluído no Python 3)
